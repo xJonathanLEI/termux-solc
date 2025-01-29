@@ -1,0 +1,74 @@
+on:
+  workflow_dispatch:
+
+name: "Build solc"
+
+jobs:
+  package-info:
+    name: "Extract package info"
+    runs-on: "ubuntu-latest"
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+
+    steps:
+      - name: "Checkout source code"
+        uses: "actions/checkout@v4"
+
+      - id: "derive"
+        name: "Derive package info from build script"
+        run: |
+          source ./solidity/build.sh
+          echo "version=${TERMUX_PKG_VERSION}" >> $GITHUB_OUTPUT
+
+  build-android:
+    name: "Build for aarch64-linux-android"
+    runs-on: "ubuntu-latest"
+    needs:
+      - "package-info"
+
+    permissions:
+      id-token: "write"
+      contents: "read"
+      attestations: "write"
+
+    steps:
+      - name: "Checkout source code"
+        uses: "actions/checkout@v4"
+
+      - name: "Checkout termux-packages"
+        run: |
+          cd ..
+          git clone https://github.com/termux/termux-packages
+          cd termux-packages
+          git checkout c444bffde58b0d1f60f216dd85930c53d0db0558
+
+      - name: "Build for aarch64"
+        run: |
+          cd ../termux-packages
+          rm -rf ./packages/solidity
+          cp -r ../termux-solc/solidity ./packages/solidity
+          ./scripts/run-docker.sh ./build-package.sh -a aarch64 solidity
+
+      - name: "Extract binary"
+        run: |
+          REPO=$(pwd)
+
+          cd ../termux-packages/output
+          ar x solidity_${{ needs.package-info.outputs.version }}_aarch64.deb
+          tar Jxvf data.tar.xz
+          mv ./data/data/com.termux/files/usr/bin/solc $REPO/solc-v${{ needs.package-info.outputs.version }}
+
+      - name: "Upload artifacts"
+        uses: "actions/upload-artifact@v3"
+        with:
+          name: "solc-v${{ needs.package-info.outputs.version }}"
+          path: "solc-v${{ needs.package-info.outputs.version }}"
+
+      - name: "Checksum"
+        run: |
+          sha256sum solc-v${{ needs.package-info.outputs.version }}
+
+      - name: "Generate artifact attestation"
+        uses: "actions/attest-build-provenance@v2"
+        with:
+          subject-path: "./solc-v${{ needs.package-info.outputs.version }}"
